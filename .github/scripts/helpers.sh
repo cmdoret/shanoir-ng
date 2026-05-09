@@ -18,7 +18,13 @@ wait_for_log() {
 	while [ "$elapsed" -lt "$timeout" ]; do
 		# -a: treat logs as text (docker occasionally emits NUL/control bytes; grep
 		# may otherwise skip "binary" stdin and miss matches).
-		if docker logs "$container" 2>&1 | grep -aqE "$pattern"; then
+		#
+		# IMPORTANT: With `set -o pipefail`, when grep -q matches it exits immediately
+		# and docker logs receives SIGPIPE (often exit 141). The pipeline status is
+		# then non-zero even though grep succeeded — the loop never sees a match.
+		# Run this pipeline without pipefail so the exit status reflects grep only.
+		if ( set +o pipefail
+		     docker logs "$container" 2>&1 | grep -aqE "$pattern" ); then
 			echo "Pattern matched in '$container' logs (after ${elapsed}s)"
 			return 0
 		fi
