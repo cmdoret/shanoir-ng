@@ -78,6 +78,50 @@ wait_for_url() {
 	return $TIMEOUT_EXIT
 }
 
+# Poll Keycloak until the shanoir-admin password grant returns an access token.
+# After `docker compose restart`, `wait_for_log` often matches *old* log lines and
+# returns immediately while Keycloak is still starting — use this instead for readiness.
+# Usage: wait_for_shanoir_password_token [timeout_seconds]
+wait_for_shanoir_password_token() {
+	local timeout="${1:-180}"
+	local elapsed=0
+	local REALM="${REALM:-shanoir-ng}"
+	local KC_INTERNAL_BASE="${KC_INTERNAL_BASE:-http://keycloak:8080/auth}"
+	local U="${SHANOIR_TEST_USER:-shanoir-admin}"
+	local P="${SHANOIR_TEST_PASSWORD:-Ch4ng3M3!@2025}"
+
+	if [ "$(docker inspect shanoir-ng-nginx --format '{{.State.Running}}' 2>/dev/null)" != "true" ]; then
+		echo "ERROR: shanoir-ng-nginx is not running; cannot reach Keycloak from the stack." >&2
+		return 1
+	fi
+
+	echo "Waiting for Shanoir admin password grant (Keycloak realm ${REALM}, timeout: ${timeout}s)..."
+	while [ "$elapsed" -lt "$timeout" ]; do
+		local body token
+		body=$(
+			docker exec shanoir-ng-nginx curl -sS \
+				-X POST "${KC_INTERNAL_BASE}/realms/${REALM}/protocol/openid-connect/token" \
+				--data-urlencode "client_id=shanoir-swagger" \
+				--data-urlencode "username=${U}" \
+				--data-urlencode "password=${P}" \
+				--data-urlencode "grant_type=password" 2>/dev/null || true
+		)
+		token=$(echo "$body" | jq -r '.access_token // empty' 2>/dev/null || true)
+		if [ -n "$token" ]; then
+			echo "Password grant succeeded (after ${elapsed}s)"
+			return 0
+		fi
+		if [ $((elapsed % 20)) -eq 0 ] && [ "$elapsed" -gt 0 ]; then
+			echo "  ... still waiting (${elapsed}s; Keycloak may still be starting after restart)"
+		fi
+		sleep 5
+		elapsed=$((elapsed + 5))
+	done
+
+	echo "Timed out waiting for password grant from Keycloak"
+	return 124
+}
+
 # Check an HTTP endpoint and record pass/fail.
 # Usage: smoke_check_http <label> <url> <allowed_codes>
 #   allowed_codes: pipe-separated HTTP codes, e.g. "200" or "200|301|401"
@@ -148,7 +192,7 @@ smoke_tests() {
 
 if [ $# -eq 0 ]; then
 	echo "Usage: $0 <function> [args...]"
-	echo "Functions: wait_for_log, wait_for_url, smoke_tests"
+	echo "Functions: wait_for_log, wait_for_url, wait_for_shanoir_password_token, smoke_tests"
 	exit 1
 fi
 

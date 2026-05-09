@@ -221,11 +221,10 @@ jobs:
       - name: Restart stack and validate persistence
         run: |
           docker compose restart
-          sleep 60
-          bash .github/scripts/helpers.sh wait_for_log keycloak 'Keycloak .* started in' 300
-          for ms in users studies datasets import preclinical; do
-            bash .github/scripts/helpers.sh wait_for_log "$ms" 'Started .* in' 300
-          done
+          sleep 30
+          # Do not rely on wait_for_log here: Docker keeps pre-restart logs, so patterns
+          # like "Started ... in" match immediately while services are still booting.
+          bash .github/scripts/helpers.sh wait_for_shanoir_password_token 240
           bash .github/scripts/helpers.sh wait_for_url https://shanoir-ng-nginx/ 180
           bash .github/scripts/post-restart-validation.sh
 
