@@ -16,7 +16,9 @@ wait_for_log() {
 
 	echo "Waiting for pattern '$pattern' in logs of '$container' (timeout: ${timeout}s)..."
 	while [ "$elapsed" -lt "$timeout" ]; do
-		if docker logs "$container" 2>&1 | grep -qE "$pattern"; then
+		# -a: treat logs as text (docker occasionally emits NUL/control bytes; grep
+		# may otherwise skip "binary" stdin and miss matches).
+		if docker logs "$container" 2>&1 | grep -aqE "$pattern"; then
 			echo "Pattern matched in '$container' logs (after ${elapsed}s)"
 			return 0
 		fi
@@ -42,20 +44,31 @@ wait_for_url() {
 	local url="$1"
 	local timeout="${2:-120}"
 	local elapsed=0
+	local code="000"
 
 	echo "Waiting for URL $url (timeout: ${timeout}s)..."
 	while [ "$elapsed" -lt "$timeout" ]; do
-		local code
-		code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo "000")"
+		# Prefer IPv4: on some hosts curl tries IPv6 first and gets connection refused
+		# while Docker publishes 443 on IPv4 only.
+		code="$(curl -4sk -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo "000")"
+		code="$(echo "$code" | tr -d '[:space:]')"
 		if [ "$code" -ge 200 ] 2>/dev/null && [ "$code" -lt 400 ] 2>/dev/null; then
 			echo "URL $url is ready (status $code, after ${elapsed}s)"
 			return 0
+		fi
+		if [ $((elapsed % 30)) -eq 0 ] && [ "$elapsed" -gt 0 ]; then
+			local nx_status="n/a"
+			case "$url" in *shanoir-ng-nginx*)
+				nx_status="$(docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}}' shanoir-ng-nginx 2>/dev/null || echo 'unknown')"
+				;;
+			esac
+			echo "  ... still waiting for $url (HTTP ${code}, ${elapsed}s elapsed; nginx: ${nx_status})"
 		fi
 		sleep 5
 		elapsed=$((elapsed + 5))
 	done
 
-	echo "Timed out waiting for URL $url"
+	echo "Timed out waiting for URL $url (last HTTP code: ${code})"
 	return $TIMEOUT_EXIT
 }
 
@@ -68,7 +81,7 @@ smoke_check_http() {
 	local url="$2"
 	local allowed="$3"
 	local code
-	code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "$url" 2>/dev/null || echo "000")"
+	code="$(curl -4sk -o /dev/null -w '%{http_code}' --max-time 10 "$url" 2>/dev/null || echo "000")"
 	if echo "$code" | grep -qxE "$allowed"; then
 		echo "[PASS] $label (HTTP $code)"
 	else
