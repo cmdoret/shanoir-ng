@@ -81,38 +81,11 @@ jobs:
           set -euo pipefail
 
           TAG='${{ github.event.inputs.image_tag }}'
-          if [ -n "${TAG}" ]; then
-            echo "Using manually provided image tag: ${TAG}"
-            echo "SHANOIR_IMAGE_TAG=${TAG}" >> "$GITHUB_ENV"
-            exit 0
+          if [ -z "${TAG}" ]; then
+            TAG="latest"
           fi
-
-          # Try moving develop tag first (if your daily pipeline publishes it consistently).
-          CANDIDATE_TAG="develop"
-          if docker manifest inspect "ghcr.io/fli-iam/shanoir-ng/database:${CANDIDATE_TAG}" >/dev/null 2>&1; then
-            echo "Resolved tag: ${CANDIDATE_TAG}"
-            echo "SHANOIR_IMAGE_TAG=${CANDIDATE_TAG}" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          # Fallback: newest release tag NG_vX.Y.Z from database image tags.
-          TAGS_JSON="$(curl -fsSL 'https://ghcr.io/v2/fli-iam/shanoir-ng/database/tags/list')"
-          CANDIDATE_TAG="$(
-            echo "$TAGS_JSON" \
-            | jq -r '.tags[]? | select(test("^NG_v[0-9]+\\.[0-9]+\\.[0-9]+$"))' \
-            | sed 's/^NG_v//' \
-            | sort -V \
-            | tail -n1 \
-            | sed 's/^/NG_v/'
-          )"
-
-          if [ -z "${CANDIDATE_TAG}" ]; then
-            echo "ERROR: Could not resolve any NG_vX.Y.Z tag from GHCR."
-            exit 1
-          fi
-
-          echo "Resolved fallback release tag: ${CANDIDATE_TAG}"
-          echo "SHANOIR_IMAGE_TAG=${CANDIDATE_TAG}" >> "$GITHUB_ENV"
+          echo "Using image tag: ${TAG}"
+          echo "SHANOIR_IMAGE_TAG=${TAG}" >> "$GITHUB_ENV"
 
       - name: Configure /etc/hosts
         run: |
