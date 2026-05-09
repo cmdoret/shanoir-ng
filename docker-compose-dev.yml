@@ -95,6 +95,7 @@ services:
       target: database
     command: --max_allowed_packet 20000000
     environment:
+      - MYSQL_ROOT_PASSWORD=password
       - SHANOIR_MIGRATION
     ulimits:
       nofile:
