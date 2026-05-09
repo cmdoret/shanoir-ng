@@ -9,6 +9,16 @@
 # * make java.security.SecureRandom read from /dev/urandom to avoid stalling in CI containers
 
 services:
+  keycloak-database:
+    # GitHub-hosted runners can be slow on cold pulls; avoid transient unhealthy state
+    # during bootstrap when keycloak waits on service_healthy.
+    healthcheck:
+      test: [ "CMD", "mariadb-admin", "ping", "-h", "localhost", "-u", "root", "-ppassword" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
   smtp-sink:
     container_name: smtp-sink
     image: mailhog/mailhog:v1.0.1
