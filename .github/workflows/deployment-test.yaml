@@ -35,9 +35,12 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Shanoir GHCR image tag (e.g. latest, NG_v2.10.0)"
+        description: >
+          GHCR tag for ghcr.io/fli-iam/shanoir-ng/* images. Prefer develop (daily
+          snaps) or a release NG_vX.Y.Z. Do not rely on latest — several services
+          are not published under that tag.
         required: false
-        default: "latest"
+        default: "develop"
         type: string
   pull_request:
     branches: [develop, master]
@@ -61,6 +64,7 @@ jobs:
 
     permissions:
       contents: read
+      packages: read
 
     env:
       COMPOSE_FILE: "docker-compose.yml:docker-compose.ci.yml"
@@ -74,6 +78,14 @@ jobs:
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
+
+      # Manifest inspect / pulls to ghcr.io are more reliable authenticated.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Resolve SHANOIR_IMAGE_TAG
         shell: bash
@@ -81,11 +93,45 @@ jobs:
           set -euo pipefail
 
           TAG='${{ github.event.inputs.image_tag }}'
-          if [ -z "${TAG}" ]; then
-            TAG="latest"
+          TAG="${TAG:-develop}"
+
+          images=(
+            keycloak-database keycloak database database-migrations users studies
+            import datasets preclinical nifti-conversion solr nginx
+          )
+
+          full_stack_present() {
+            local t="$1"
+            local img
+            for img in "${images[@]}"; do
+              ref="ghcr.io/fli-iam/shanoir-ng/${img}:${t}"
+              if ! docker manifest inspect "${ref}" >/dev/null 2>&1; then
+                return 1
+              fi
+            done
+            return 0
+          }
+
+          if full_stack_present "${TAG}"; then
+            echo "Using image tag: ${TAG}"
+            echo "SHANOIR_IMAGE_TAG=${TAG}" >> "$GITHUB_ENV"
+            exit 0
           fi
-          echo "Using image tag: ${TAG}"
-          echo "SHANOIR_IMAGE_TAG=${TAG}" >> "$GITHUB_ENV"
+
+          echo "WARN: tag '${TAG}' is missing one or more required images."
+
+          # Rolling daily images (upstream); avoid 'latest' (incomplete for infra).
+          for fallback in develop NG_v2.10.0; do
+            if [ "${fallback}" != "${TAG}" ] && full_stack_present "${fallback}"; then
+              echo "Fallback: using image tag ${fallback} instead."
+              echo "SHANOIR_IMAGE_TAG=${fallback}" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+
+          echo "ERROR: Could not find a GHCR tag with all required microservice images." >&2
+          echo "Set workflow_dispatch image_tag explicitly (e.g. develop or NG_v2.10.0)." >&2
+          exit 1
 
       - name: Configure /etc/hosts
         run: |
